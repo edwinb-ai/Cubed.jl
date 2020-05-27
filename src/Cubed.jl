@@ -2,7 +2,6 @@ module Cubed
 
 using Random
 using RandomNumbers.Xorshifts
-using StaticArrays
 
 struct Dynamic{V<:Real}
     τ::V
@@ -31,19 +30,24 @@ function energy(pos::AbstractArray, syst::System, pot::Potential)
     total_energy = 0.0f0
     virial = 0.0f0
 
-    @inbounds for i = 1:syst.N-1
-        for j = (i + 1):syst.N
-            rij = pos[i] .- pos[j]
+    @inbounds for i = 1:syst.N
+        @fastmath for j = (i + 1):syst.N
+            xij = pos[1, i] - pos[1, j]
+            yij = pos[2, i] - pos[2, j]
+            zij = pos[3, i] - pos[3, j]
 
             # Periodic boundaries
-            nrij = rij .- syst.L .* round.(rij ./ syst.L)
+            xij -= syst.L * round(xij / syst.L)
+            yij -= syst.L * round(yij / syst.L)
+            zij -= syst.L * round(zij / syst.L)
 
             # Compute distance
-            Δpos = sqrt(sum(nrij.^2))
+            Δpos = xij * xij + yij * yij + zij * zij
+            Δpos = sqrt(Δpos)
 
             if Δpos < syst.rc
                 if Δpos < pot.b
-                    ener = (pot.a / pot.temp) * 
+                    ener = (pot.a / pot.temp) *
                         ((1.0f0/Δpos)^pot.λ - (1.0f0/Δpos)^(pot.λ - 1.0f0))
                     ener += 1.0f0 / pot.temp
                     total_energy += ener
@@ -171,8 +175,6 @@ function run()
     positions = fill(0.0f0, 3, N)
     # Initialize the positions as grid
     init!(positions, syst)
-    # Convert to array of StaticArrays
-    positions = [SVector{3}(positions[:, i]) for i in axes(positions, 2)]
     (syst.ener, _) = energy(positions, syst, potential)
     println("Initial energy: $(syst.ener / syst.N)")
 
