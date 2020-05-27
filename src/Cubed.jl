@@ -2,6 +2,7 @@ module Cubed
 
 using Random
 using RandomNumbers.Xorshifts
+using ProgressMeter
 
 struct Dynamic{V<:Real}
     τ::V
@@ -20,18 +21,20 @@ mutable struct System{V<:Real}
     ρ::V
     vol::V
     β::V
-    P::V
+    press::V
     rc::V
     rng::Random.AbstractRNG
     ener::V
 end
 
-function energy(pos::AbstractArray, syst::System, pot::Potential)
+function energy!(pos, forces, syst, pot)
     total_energy = 0.0f0
     virial = 0.0f0
+    force = 0.0f0
+    ener = 0.0f0
 
-    @inbounds for i = 1:syst.N
-        @fastmath for j = (i + 1):syst.N
+    @inbounds for i = 1:syst.N-1
+        for j = (i + 1):syst.N
             xij = pos[1, i] - pos[1, j]
             yij = pos[2, i] - pos[2, j]
             zij = pos[3, i] - pos[3, j]
@@ -47,12 +50,37 @@ function energy(pos::AbstractArray, syst::System, pot::Potential)
 
             if Δpos < syst.rc
                 if Δpos < pot.b
+                    # * Energy computation
                     ener = (pot.a / pot.temp) *
                         ((1.0f0/Δpos)^pot.λ - (1.0f0/Δpos)^(pot.λ - 1.0f0))
                     ener += 1.0f0 / pot.temp
-                    total_energy += ener
+
+
+                    # * Force computation
+                    force = pot.λ * (1.0f0/Δpos)^(pot.λ + 1.0f0)
+                    force -= (pot.λ - 1.0f0) * (1.0f0/Δpos)^pot.λ
+                    force *= (pot.a / pot.temp)
+                else
+                    force = 0.0f0
+                    ener = 0.0f0
                 end
             end
+            # * Update the energy
+            total_energy += ener
+
+            # * Update the forces
+            forces[1, i] += (force * xij) / Δpos
+            forces[1, j] -= (force * xij) / Δpos
+
+            forces[2, i] += (force * yij) / Δpos
+            forces[2, j] -= (force * yij) / Δpos
+
+            forces[3, i] += (force * zij) / Δpos
+            forces[3, j] -= (force * zij) / Δpos
+
+            # * Compute the virial
+            virial += (force * xij * xij) + (force * yij * yij) + (force * zij * zij)
+            virial /= Δpos
         end
     end
 
@@ -88,68 +116,73 @@ function init!(positions::AbstractArray, syst::System)
     end
 end
 
+function ermak!(positions, forces, syst, dynamics, rnd_matrix; pbc::Bool = true)
+    for j  = axes(positions, 2)
+        @inbounds for i = axes(positions, 1)
+            positions[i, j] += (forces[i, j] * dynamics.τ) + rnd_matrix[i, j]
+            if pbc
+                positions[i, j] -= syst.L * round(positions[i, j] / syst.L)
+            end
+        end
+    end
+end
 
-# function move(
-#     positions::AbstractArray,
-#     syst::System,
-#     cycles::Int;
-#     volume::Bool = false,
-#     filename = nothing,
-# )
-#     # Run values
-#     attempts = 0
-#     volatt = 0
-#     accepted = 0
-#     volaccpt = 0
-#     total_energy = 0
-#     total_pressure = 0
-#     total_ρ = 0
-#     ratio = 0
-#     volratio = 0
-#     samples = 0
 
-#     # Equilibration steps
-#     @showprogress for i = 1:cycles
-#         # * Attempt to move the particles around
-#         attempts += 1
-#         mc = metropolis!(positions, syst, disp)
-#         accepted += mc
-#         ratio = accepted / attempts
+function move(positions, forces, syst, dynamics, potential, cycles; filename = nothing)
+    # Run values
+    attempts = 0
+    total_energy = 0
+    total_pressure = 0
+    total_ρ = 0
+    samples = 0
 
-#         # * Attempt to change the volume in the system
-#         if volume
-#             if i % Int(syst.N * 2) == 0
-#                 volatt += 1
-#                 mc = mcvolume!(positions, syst, disp)
-#                 volaccpt += mc
-#                 volratio = volaccpt / volatt
-#             end
-#         end
+    rnd_matrix = Matrix{Float32}(undef, 3, syst.N)
 
-#         # * Save to file
-#         if i % syst.N == 0
-#             samples += 1
+    # Equilibration steps
+    @showprogress for i = 1:cycles
+        # * Create array of random numbers
+        randn!(syst.rng, rnd_matrix)
+        rnd_matrix .*= sqrt(2.0f0 * dynamics.τ)
 
-#             # * Update the total energy of the system
-#             total_energy += syst.ener
+        # * Attempt to move the particles around
+        attempts += 1
+        ermak!(positions, forces, syst, dynamics, rnd_matrix)
 
-#             # * Update the total pressure of the system
-#             total_pressure += syst.press / (syst.vol * 3.0)
-#         end
-#     end
-#     # Save previous values
-#     syst.ener = total_energy / samples
-#     syst.press = total_pressure / samples
+        # ! Initialize forces
+        fill!(forces, 0.0f0)
+        (syst.ener, syst.press) = energy!(positions, forces, syst, potential)
 
-#     # Adjust results as averages
-#     total_energy /= (syst.N * samples)
-#     pressure = (total_pressure / samples) + (syst.ρ / syst.β)
+        # * Save to file
+        if i % syst.N == 0
+            samples += 1
 
-#     # * Show results
-#     println("Energy: $(total_energy)")
-#     println("Ratio of acceptance: $(ratio)")
-#     println("Pressure: $(pressure)")
-# end
+            # * Update the total energy of the system
+            total_energy += syst.ener
+
+            # * Update the total pressure of the system
+            total_pressure += syst.press / (syst.vol * 3.0)
+
+            if !isnothing(filename)
+                open(filename, "a") do io
+                    filener = total_energy / (syst.N * samples)
+                    filepress = (total_pressure / samples) + (syst.ρ / syst.β)
+                    println(io, "$(filener),$(filepress)")
+                end
+            end
+        end
+    end
+    # Save previous values
+    syst.ener = total_energy / samples
+    syst.press = total_pressure / samples
+
+    # Adjust results as averages
+    total_energy /= (syst.N * samples)
+    pressure = (total_pressure / samples) + (syst.ρ / syst.β)
+
+    # * Show results
+    println("Energy: $(total_energy)")
+    println("Pressure: $(pressure)")
+end
 
 function run()
     # * Simulation parameters
@@ -172,15 +205,18 @@ function run()
     potential = Potential(a, b, 1.4737f0, 50)
 
     # Create the positions vector
-    positions = fill(0.0f0, 3, N)
+    positions = Matrix{Float32}(undef, 3, N)
+    fill!(positions, 0.0f0)
+    forces = Matrix{Float32}(undef, 3, N)
+    fill!(forces, 0.0f0)
     # Initialize the positions as grid
     init!(positions, syst)
-    (syst.ener, _) = energy(positions, syst, potential)
+    (syst.ener, syst.press) = energy!(positions, forces, syst, potential)
     println("Initial energy: $(syst.ener / syst.N)")
 
     # * Main loop
     # Equilibration steps
-    # move(positions, syst, 200000, dispm; volume = false)
+    move(positions, forces, syst, dynamic, potential, 200000)
 
     # # Sampling steps
     # move(positions, syst, 300000, dispm; volume = false, filename = "nvt_$(ρ)_$(P).dat")
