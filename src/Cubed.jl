@@ -28,7 +28,19 @@ mutable struct System{V<:Real}
     ener::V
 end
 
-function energy!(pos, forces, syst, pot, total_energy, virial)
+function energy!(pos,
+    forces,
+    N,
+    L,
+    rc,
+    a,
+    b,
+    λ,
+    temp,
+    total_energy,
+    virial
+)
+
     total_energy = 0.0f0
     virial = 0.0f0
     force = 0.0f0
@@ -37,33 +49,33 @@ function energy!(pos, forces, syst, pot, total_energy, virial)
     index = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     stride = blockDim().x * gridDim().x
 
-    for i = 1:syst.N
-        for j = index:stride:syst.N
+    for i = 1:N
+        for j = index:stride:N
             xij = pos[1, i] - pos[1, j]
             yij = pos[2, i] - pos[2, j]
             zij = pos[3, i] - pos[3, j]
 
             # Periodic boundaries
-            xij -= syst.L * round(xij / syst.L)
-            yij -= syst.L * round(yij / syst.L)
-            zij -= syst.L * round(zij / syst.L)
+            xij -= L * CUDA.round(xij / L)
+            yij -= L * CUDA.round(yij / L)
+            zij -= L * CUDA.round(zij / L)
 
             # Compute distance
             Δpos = xij * xij + yij * yij + zij * zij
-            Δpos = sqrt(Δpos)
+            Δpos = CUDA.sqrt(Δpos)
 
-            if Δpos < syst.rc
-                if Δpos < pot.b
+            if Δpos < rc
+                if Δpos < b
                     # * Energy computation
-                    ener = (pot.a / pot.temp) *
-                        ((1.0f0/Δpos)^pot.λ - (1.0f0/Δpos)^(pot.λ - 1.0f0))
-                    ener += 1.0f0 / pot.temp
+                    ener = (a / temp) *
+                        (CUDA.pow(1.0f0/Δpos,λ) - CUDA.pow(1.0f0/Δpos, (λ - 1.0f0)))
+                    ener += 1.0f0 / temp
 
 
                     # * Force computation
-                    force = pot.λ * (1.0f0/Δpos)^(pot.λ + 1.0f0)
-                    force -= (pot.λ - 1.0f0) * (1.0f0/Δpos)^pot.λ
-                    force *= pot.a / pot.temp
+                    force = λ * CUDA.pow(1.0f0/Δpos, (λ + 1.0f0))
+                    force -= (λ - 1.0f0) * CUDA.pow(1.0f0/Δpos, λ)
+                    force *= a / temp
                 else
                     force = 0.0f0
                     ener = 0.0f0
@@ -82,8 +94,8 @@ function energy!(pos, forces, syst, pot, total_energy, virial)
             forces[3, j] -= (force * zij) / Δpos
 
             # * Compute the virial
-            virial += (force * xij * xij) + (force * yij * yij) + (force * zij * zij)
-            virial *= 3.0f0 / Δpos
+            virial += (force * xij * xij / Δpos) + (force * yij * yij / Δpos)
+            virial += (force * zij * zij) / Δpos
         end
     end
 
@@ -120,19 +132,28 @@ function init!(positions::AbstractArray, syst::System)
     end
 end
 
-function ermak!(positions, forces, syst, dynamics, rnd_matrix; pbc::Bool = true)
+function ermak!(
+    positions,
+    forces,
+    N,
+    L,
+    τ,
+    rnd_matrix;
+    pbc::Bool = true
+)
+
     index = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     stride = blockDim().x * gridDim().x
 
-    for j = index:stride:syst.N
-        positions[1, j] += (forces[1, j] * dynamics.τ) + rnd_matrix[1, j]
-        positions[2, j] += (forces[2, j] * dynamics.τ) + rnd_matrix[2, j]
-        positions[3, j] += (forces[3, j] * dynamics.τ) + rnd_matrix[3, j]
+    for j = index:stride:N
+        positions[1, j] += (forces[1, j] * τ) + rnd_matrix[1, j]
+        positions[2, j] += (forces[2, j] * τ) + rnd_matrix[2, j]
+        positions[3, j] += (forces[3, j] * τ) + rnd_matrix[3, j]
 
         if pbc
-            positions[1, j] -= syst.L * round(positions[1, j] / syst.L)
-            positions[2, j] -= syst.L * round(positions[2, j] / syst.L)
-            positions[3, j] -= syst.L * round(positions[3, j] / syst.L)
+            positions[1, j] -= L * round(positions[1, j] / L)
+            positions[2, j] -= L * round(positions[2, j] / L)
+            positions[3, j] -= L * round(positions[3, j] / L)
         end
     end
 end
@@ -147,7 +168,8 @@ function move(positions, forces, syst, dynamics, potential, cycles; filename = n
     samples = 0
 
     nthreads = 1
-    gpu_blocks = syst.N / nthreads
+    # gpu_blocks = syst.N / nthreads
+    gpu_blocks = 1
 
     rnd_matrix = Matrix{Float32}(undef, 3, syst.N)
 
@@ -163,9 +185,10 @@ function move(positions, forces, syst, dynamics, potential, cycles; filename = n
         CUDA.@sync begin
             @cuda threads=nthreads blocks=gpu_blocks ermak!(positions,
                 forces,
-                syst,
-                dynamics,
-                cu_rand_matrix
+                syst.N,
+                syst.L,
+                dynamics.τ,
+                cu_rand_matrix,
             )
         end
         # display(forces)
@@ -176,10 +199,15 @@ function move(positions, forces, syst, dynamics, potential, cycles; filename = n
         CUDA.@sync begin
             @cuda threads=nthreads blocks=gpu_blocks energy!(positions,
                 forces,
-                syst,
-                potential,
+                syst.N,
+                syst.L,
+                syst.rc,
+                potential.a,
+                potential.b,
+                potential.λ,
+                potential.temp,
                 syst.ener,
-                syst.press
+                syst.press,
             )
         end
 
@@ -250,10 +278,15 @@ function run()
     CUDA.@sync begin
         @cuda threads=nthreads blocks=gpu_blocks energy!(positions,
             forces,
-            syst,
-            potential,
+            syst.N,
+            syst.L,
+            syst.rc,
+            potential.a,
+            potential.b,
+            potential.λ,
+            potential.temp,
             syst.ener,
-            syst.press
+            syst.press,
         )
     end
     println("Initial energy: $(syst.ener / syst.N)")
