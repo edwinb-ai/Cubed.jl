@@ -27,17 +27,18 @@ mutable struct System{V<:Real}
     ener::AbstractArray
 end
 
-function energy!(pos,
-    forces,
-    N,
-    L,
-    rc,
-    a,
-    b,
-    λ,
-    temp,
-    full_ener,
-    vir
+function energy!(
+    pos::AbstractArray,
+    forces::AbstractArray,
+    N::Integer,
+    L::Real,
+    rc::Real,
+    a::Real,
+    b::Real,
+    λ::Integer,
+    temp::Real,
+    full_ener::AbstractArray,
+    vir::AbstractArray
 )
 
     total_energy = 0.0f0
@@ -99,6 +100,8 @@ function energy!(pos,
             virial += (force * xij * xij / Δpos) + (force * yij * yij / Δpos)
             virial += (force * zij * zij) / Δpos
         end
+
+        # * Save the values in their respective arrays
         full_ener[i] = total_energy
         vir[i] = virial
     end
@@ -136,12 +139,12 @@ function init!(positions::AbstractArray, syst::System)
 end
 
 function ermak!(
-    positions,
-    forces,
-    N,
-    L,
-    τ,
-    rnd_matrix;
+    positions::AbstractArray,
+    forces::AbstractArray,
+    N::Integer,
+    L::Real,
+    τ::Real,
+    rnd_matrix::AbstractArray;
     pbc::Bool = true
 )
 
@@ -165,28 +168,28 @@ end
 
 
 function move(positions, forces, syst, dynamics, potential, cycles; filename = nothing)
-    # Run values
-    attempts = 0
-    total_energy = 0
-    total_pressure = 0
-    total_ρ = 0
+    # * Accumulation variables
+    total_energy = 0.0f0
+    total_pressure = 0.0f0
+    big_z = 0.0f0
+    total_virial = 0.0f0
     samples = 0
 
+    # GPU variables for the kernels
     nthreads = 256
     gpu_blocks = ceil(Int(syst.N / nthreads))
-    # gpu_blocks = 1
 
+    # Allocate memory for random numbers
     rnd_matrix = Matrix{Float32}(undef, 3, syst.N)
 
-    # Equilibration steps
+    # ! Main loop
     @showprogress for i = 1:cycles
         # * Create array of random numbers
         randn!(syst.rng, rnd_matrix)
         rnd_matrix .*= sqrt(2.0f0 * dynamics.τ)
         cu_rand_matrix = CuArray(rnd_matrix)
 
-        # * Attempt to move the particles around
-        attempts += 1
+        # * Move the particles following the Ermak-McCammon algorithm
         CUDA.@sync begin
             @cuda threads=nthreads blocks=gpu_blocks ermak!(positions,
                 forces,
@@ -196,11 +199,11 @@ function move(positions, forces, syst, dynamics, potential, cycles; filename = n
                 cu_rand_matrix,
             )
         end
-        # display(forces)
 
-        # ! Initialize forces
-        CUDA.fill!(forces, 0.0f0)
-        # (syst.ener, syst.press) = energy!(positions, forces, syst, potential)
+        # ! Always set forces to zero
+        fill!(forces, 0.0f0)
+        
+        # ! Compute the energy and forces, O(N^2) complexity
         CUDA.@sync begin
             @cuda threads=nthreads blocks=gpu_blocks energy!(positions,
                 forces,
@@ -217,14 +220,18 @@ function move(positions, forces, syst, dynamics, potential, cycles; filename = n
         end
 
         # * Save to file
-        if i > 100000 && i % syst.N == 0
+        if i >= 100000 && i % syst.N == 0
             samples += 1
 
             # * Update the total energy of the system
             total_energy += sum(syst.ener)
 
+            # * Extract the virial from the kernel
+            total_virial = sum(syst.press)
+            total_virial /= 3.0f0
+            big_z = 1.0f0 + (total_virial / syst.N)
             # * Update the total pressure of the system
-            total_pressure += sum(syst.press) / (syst.vol * 3.0f0)
+            total_pressure = big_z / syst.ρ
 
             if !isnothing(filename)
                 open(filename, "a") do io
@@ -241,11 +248,12 @@ function move(positions, forces, syst, dynamics, potential, cycles; filename = n
 
     # Adjust results as averages
     total_energy /= (syst.N * samples)
-    pressure = (total_pressure / samples) + syst.ρ
+    pressure = total_pressure / samples
 
     # * Show results
     println("Energy: $(total_energy)")
     println("Pressure: $(pressure)")
+    println("Compressibility: $(big_z)")
 end
 
 function run()
@@ -264,10 +272,10 @@ function run()
 
     # gpu_blocks = 1
     nthreads = 256
-    gpu_blocks = ceil(Int(N / nthreads))
+    gpu_blocks = ceil(Int(N / nthreads)) 
 
     # Create a rng
-    rng = Xorshift1024Star(123456)
+    rng = Xorshift1024Star()
     # Initialize the system object
     syst = System(N, Lcaja, ρ, volumen, P, rc, rng, E)
     dynamic = Dynamic(0.000005f0)
@@ -276,17 +284,18 @@ function run()
     a = convert(Float32, λ * b^(λ - 1.0f0))
     potential = Potential(a, b, 1.4737f0, 50)
 
-    # Create the positions vector
+    # Create the positions array, first in host
     positions = Array{Float32}(undef, 3, N)
     fill!(positions, 0.0f0)
+    # Creat the forces array, in device
     forces = CuArray{Float32}(undef, 3, N)
     fill!(forces, 0.0f0)
     # Initialize the positions as grid
     init!(positions, syst)
+    # Send the positions array to device
     cu_positions = CuArray(positions)
-    # (syst.ener, syst.press) = energy!(positions, forces, syst, potential)
-    cu_energy = CuArray{Float32}(undef, N)
-    fill!(cu_energy, 0.0f0)
+
+    # ! Compute the initial energy of the system
     CUDA.@sync begin
         @cuda threads=nthreads blocks=gpu_blocks energy!(cu_positions,
             forces,
@@ -297,12 +306,12 @@ function run()
             potential.b,
             potential.λ,
             potential.temp,
-            cu_energy,
+            syst.ener,
             syst.press,
         )
     end
-    totale = sum(cu_energy)
-    println("Initial energy: $(totale / syst.N)")
+    totale = sum(syst.ener) / syst.N
+    println("Initial energy: $(totale)")
 
     # * Main loop
     # Equilibration steps
