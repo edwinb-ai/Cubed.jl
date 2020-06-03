@@ -21,11 +21,10 @@ mutable struct System{V<:Real}
     L::V
     ρ::V
     vol::V
-    β::V
-    press::V
+    press::AbstractArray
     rc::V
     rng::Random.AbstractRNG
-    ener::V
+    ener::AbstractArray
 end
 
 function energy!(pos,
@@ -37,8 +36,8 @@ function energy!(pos,
     b,
     λ,
     temp,
-    total_energy,
-    virial
+    full_ener,
+    vir
 )
 
     total_energy = 0.0f0
@@ -51,6 +50,9 @@ function energy!(pos,
 
     for i = 1:N
         for j = index:stride:N
+            if i == j
+                continue
+            end
             xij = pos[1, i] - pos[1, j]
             yij = pos[2, i] - pos[2, j]
             zij = pos[3, i] - pos[3, j]
@@ -68,13 +70,13 @@ function energy!(pos,
                 if Δpos < b
                     # * Energy computation
                     ener = (a / temp) *
-                        (CUDA.pow(1.0f0/Δpos,λ) - CUDA.pow(1.0f0/Δpos, (λ - 1.0f0)))
+                        (CUDA.pow(Δpos,-λ) - CUDA.pow(Δpos, -(λ - 1.0f0)))
                     ener += 1.0f0 / temp
 
 
                     # * Force computation
-                    force = λ * CUDA.pow(1.0f0/Δpos, (λ + 1.0f0))
-                    force -= (λ - 1.0f0) * CUDA.pow(1.0f0/Δpos, λ)
+                    force = λ * CUDA.pow(Δpos, -(λ + 1.0f0))
+                    force -= (λ - 1.0f0) * CUDA.pow(Δpos, -λ)
                     force *= a / temp
                 else
                     force = 0.0f0
@@ -97,9 +99,10 @@ function energy!(pos,
             virial += (force * xij * xij / Δpos) + (force * yij * yij / Δpos)
             virial += (force * zij * zij) / Δpos
         end
+        full_ener[i] = total_energy
+        vir[i] = virial
     end
 
-    # return (total_energy, virial)
     return nothing
 end
 
@@ -156,6 +159,8 @@ function ermak!(
             positions[3, j] -= L * round(positions[3, j] / L)
         end
     end
+
+    return nothing
 end
 
 
@@ -167,9 +172,9 @@ function move(positions, forces, syst, dynamics, potential, cycles; filename = n
     total_ρ = 0
     samples = 0
 
-    nthreads = 1
-    # gpu_blocks = syst.N / nthreads
-    gpu_blocks = 1
+    nthreads = 256
+    gpu_blocks = ceil(Int(syst.N / nthreads))
+    # gpu_blocks = 1
 
     rnd_matrix = Matrix{Float32}(undef, 3, syst.N)
 
@@ -212,31 +217,31 @@ function move(positions, forces, syst, dynamics, potential, cycles; filename = n
         end
 
         # * Save to file
-        if i % syst.N == 0
+        if i > 100000 && i % syst.N == 0
             samples += 1
 
             # * Update the total energy of the system
-            total_energy += syst.ener
+            total_energy += sum(syst.ener)
 
             # * Update the total pressure of the system
-            total_pressure += syst.press / (syst.vol * 3.0f0)
+            total_pressure += sum(syst.press) / (syst.vol * 3.0f0)
 
             if !isnothing(filename)
                 open(filename, "a") do io
                     filener = total_energy / (syst.N * samples)
-                    filepress = (total_pressure / samples) + (syst.ρ / syst.β)
+                    filepress = (total_pressure / samples) + syst.ρ
                     println(io, "$(filener),$(filepress)")
                 end
             end
         end
     end
     # Save previous values
-    syst.ener = total_energy / samples
-    syst.press = total_pressure / samples
+    # syst.ener = total_energy / samples
+    # syst.press = total_pressure / samples
 
     # Adjust results as averages
     total_energy /= (syst.N * samples)
-    pressure = (total_pressure / samples) + (syst.ρ / syst.β)
+    pressure = (total_pressure / samples) + syst.ρ
 
     # * Show results
     println("Energy: $(total_energy)")
@@ -244,23 +249,27 @@ function move(positions, forces, syst, dynamics, potential, cycles; filename = n
 end
 
 function run()
+    CUDA.allowscalar(false)
+
     # * Simulation parameters
-    N = 2048  # number of particles
+    N = 2048 # number of particles
     ρ = 0.76f0 # reduced density
     volumen = N / ρ # reduced volume
     Lcaja = ∛volumen # Cubic box length
-    T = 1.0f0 # Reduced temperature
     rc = Lcaja / 2.0f0
-    P = 0.0f0
+    P = CuArray{Float32}(undef, N)
+    fill!(P, 0.0f0)
+    E = CuArray{Float32}(undef, N)
+    fill!(E, 0.0f0)
 
-    # gpu_blocks = N / 256
-    gpu_blocks = 1
-    nthreads = 1
+    # gpu_blocks = 1
+    nthreads = 256
+    gpu_blocks = ceil(Int(N / nthreads))
 
     # Create a rng
-    rng = Xoroshiro128Star(123456)
+    rng = Xorshift1024Star(123456)
     # Initialize the system object
-    syst = System(N, Lcaja, ρ, volumen, 1.0f0 / T, P, rc, rng, 0.0f0)
+    syst = System(N, Lcaja, ρ, volumen, P, rc, rng, E)
     dynamic = Dynamic(0.000005f0)
     λ = 50
     b = convert(Float32, λ / (λ - 1.0f0))
@@ -268,15 +277,18 @@ function run()
     potential = Potential(a, b, 1.4737f0, 50)
 
     # Create the positions vector
-    positions = CuArray{Float32}(undef, 3, N)
+    positions = Array{Float32}(undef, 3, N)
     fill!(positions, 0.0f0)
     forces = CuArray{Float32}(undef, 3, N)
     fill!(forces, 0.0f0)
     # Initialize the positions as grid
     init!(positions, syst)
+    cu_positions = CuArray(positions)
     # (syst.ener, syst.press) = energy!(positions, forces, syst, potential)
+    cu_energy = CuArray{Float32}(undef, N)
+    fill!(cu_energy, 0.0f0)
     CUDA.@sync begin
-        @cuda threads=nthreads blocks=gpu_blocks energy!(positions,
+        @cuda threads=nthreads blocks=gpu_blocks energy!(cu_positions,
             forces,
             syst.N,
             syst.L,
@@ -285,15 +297,16 @@ function run()
             potential.b,
             potential.λ,
             potential.temp,
-            syst.ener,
+            cu_energy,
             syst.press,
         )
     end
-    println("Initial energy: $(syst.ener / syst.N)")
+    totale = sum(cu_energy)
+    println("Initial energy: $(totale / syst.N)")
 
     # * Main loop
     # Equilibration steps
-    move(positions, forces, syst, dynamic, potential, 10000)
+    move(cu_positions, forces, syst, dynamic, potential, 200000)
 
     # # Sampling steps
     # move(positions, syst, 300000, dispm; volume = false, filename = "nvt_$(ρ)_$(P).dat")
