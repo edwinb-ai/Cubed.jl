@@ -19,8 +19,8 @@ function run()
     N = 2048 # number of particles
     ρ = 0.76f0 # reduced density
     volumen = N / ρ # reduced volume
-    Lcaja = ∛volumen # Cubic box length
-    rc = Lcaja / 2.0f0
+    Lbox = ∛volumen # Cubic box length
+    rc = Lbox / 2.0f0
     P = CuArray{Float32}(undef, N)
     fill!(P, 0.0f0)
     E = CuArray{Float32}(undef, N)
@@ -33,7 +33,7 @@ function run()
     # Create a rng
     rng = Xorshift1024Star()
     # Initialize the system object
-    syst = System(N, Lcaja, ρ, volumen, P, rc, rng, E)
+    syst = System(N, Lbox, ρ, volumen, P, rc, rng, E)
     dynamic = Dynamic(0.000005f0)
     λ = 50
     b = convert(Float32, λ / (λ - 1.0f0))
@@ -70,11 +70,15 @@ function run()
     println("Initial energy: $(totale)")
 
     # * Main loop
-    # Equilibration steps
-    move(cu_positions, forces, syst, dynamic, potential, 100000)
-
-    # # Sampling steps
-    # move(positions, syst, 300000, dispm; volume = false, filename = "nvt_$(ρ)_$(P).dat")
+    move(
+        cu_positions,
+        forces,
+        syst,
+        dynamic, 
+        potential, 
+        200000; 
+        filename = "$(ρ)_$(N).csv"
+    )
 end
 
 run()

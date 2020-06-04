@@ -28,11 +28,21 @@ function init!(positions::AbstractArray, syst::System)
 end
 
 
-function move(positions, forces, syst, dynamics, potential, cycles; filename = nothing)
+function move(
+    positions::AbstractArray,
+    forces::AbstractArray,
+    syst::System, 
+    dynamics::Dynamic,
+    potential::Potential,
+    cycles::Integer;
+    filename::String = nothing,
+    thermal::Integer = Int(cycles / 2)
+)
     # * Accumulation variables
     total_energy = 0.0f0
     total_pressure = 0.0f0
     big_z = 0.0f0
+    total_z = 0.0f0
     total_virial = 0.0f0
     samples = 0
 
@@ -81,38 +91,37 @@ function move(positions, forces, syst, dynamics, potential, cycles; filename = n
         end
 
         # * Save to file
-        if i >= 50000 && i % syst.N == 0
+        if i >= thermal
             samples += 1
 
             # * Update the total energy of the system
-            total_energy += sum(syst.ener)
+            total_energy = sum(syst.ener)
 
             # * Extract the virial from the kernel
             total_virial = sum(syst.press)
             total_virial /= 3.0f0
             big_z = 1.0f0 + (total_virial / syst.N)
+            total_z += big_z
             # * Update the total pressure of the system
             total_pressure = big_z / syst.ρ
 
             if !isnothing(filename)
                 open(filename, "a") do io
                     filener = total_energy / (syst.N * samples)
-                    filepress = (total_pressure / samples) + syst.ρ
-                    println(io, "$(filener),$(filepress)")
+                    println(io, "$(filener),$(total_pressure),$(big_z)")
                 end
             end
         end
     end
-    # Save previous values
-    # syst.ener = total_energy / samples
-    # syst.press = total_pressure / samples
 
-    # Adjust results as averages
+    # ! Adjust results as averages
     total_energy /= (syst.N * samples)
     pressure = total_pressure / samples
+    total_z = big_z / samples
 
     # * Show results
     println("Energy: $(total_energy)")
     println("Pressure: $(pressure)")
     println("Compressibility: $(big_z)")
+    println("Compressibility (average): $(total_z)")
 end

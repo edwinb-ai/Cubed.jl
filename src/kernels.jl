@@ -21,10 +21,15 @@ function energy!(
     stride = blockDim().x * gridDim().x
 
     for i = 1:N
+        # Reset variables
+        total_energy = 0.0f0
+        virial = 0.0f0
+
         for j = index:stride:N
             if i == j
                 continue
             end
+
             xij = pos[1, i] - pos[1, j]
             yij = pos[2, i] - pos[2, j]
             zij = pos[3, i] - pos[3, j]
@@ -49,7 +54,7 @@ function energy!(
                     # * Force computation
                     force = λ * CUDA.pow(Δpos, -(λ + 1.0f0))
                     force -= (λ - 1.0f0) * CUDA.pow(Δpos, -λ)
-                    force *= a / temp
+                    force *= -a / temp
                 else
                     force = 0.0f0
                     ener = 0.0f0
