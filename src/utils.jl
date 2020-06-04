@@ -25,6 +25,8 @@ function init!(positions::AbstractArray, syst::System)
             end
         end
     end
+
+    return nothing
 end
 
 
@@ -48,7 +50,7 @@ function move(
 
     # GPU variables for the kernels
     nthreads = 256
-    gpu_blocks = ceil(Int(syst.N / nthreads))
+    gpu_blocks = ceil(Int,syst.N / nthreads)
 
     # Allocate memory for random numbers
     rnd_matrix = Matrix{Float32}(undef, 3, syst.N)
@@ -56,13 +58,13 @@ function move(
     # ! Main loop
     @showprogress for i = 1:cycles
         # * Create array of random numbers
-        randn!(syst.rng, rnd_matrix)
+        Random.randn!(syst.rng, rnd_matrix)
         rnd_matrix .*= sqrt(2.0f0 * dynamics.τ)
         cu_rand_matrix = CuArray(rnd_matrix)
 
         # * Move the particles following the Ermak-McCammon algorithm
         CUDA.@sync begin
-            @cuda threads=nthreads blocks=gpu_blocks ermak!(positions,
+            @cuda threads=nthreads blocks=gpu_blocks gpu_ermak!(positions,
                 forces,
                 syst.N,
                 syst.L,
@@ -70,13 +72,12 @@ function move(
                 cu_rand_matrix,
             )
         end
-
         # ! Always set forces to zero
-        fill!(forces, 0.0f0)
+        CUDA.fill!(forces, 0.0f0)
         
         # ! Compute the energy and forces, O(N^2) complexity
         CUDA.@sync begin
-            @cuda threads=nthreads blocks=gpu_blocks energy!(positions,
+            @cuda threads=nthreads blocks=gpu_blocks gpu_energy!(positions,
                 forces,
                 syst.N,
                 syst.L,
@@ -89,18 +90,19 @@ function move(
                 syst.press,
             )
         end
-
         # * Save to file
         if i >= thermal
             samples += 1
 
             # * Update the total energy of the system
+            display(syst.ener)
             total_energy = sum(syst.ener)
 
             # * Extract the virial from the kernel
+            display(syst.press)
             total_virial = sum(syst.press)
-            total_virial /= 3.0f0
-            big_z = 1.0f0 + (total_virial / syst.N)
+            total_virial /= (3.0f0 * syst.N)
+            big_z = 1.0f0 + total_virial
             total_z += big_z
             # * Update the total pressure of the system
             total_pressure = big_z / syst.ρ
@@ -111,13 +113,14 @@ function move(
                     println(io, "$(filener),$(total_pressure),$(big_z)")
                 end
             end
+            break
         end
     end
 
     # ! Adjust results as averages
     total_energy /= (syst.N * samples)
     pressure = total_pressure / samples
-    total_z = big_z / samples
+    total_z /= samples
 
     # * Show results
     println("Energy: $(total_energy)")

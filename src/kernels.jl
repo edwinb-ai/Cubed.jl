@@ -1,4 +1,4 @@
-function energy!(
+function gpu_energy!(
     pos::AbstractArray,
     forces::AbstractArray,
     N::Integer,
@@ -20,12 +20,12 @@ function energy!(
     index = (blockIdx().x - 1) * blockDim().x + threadIdx().x
     stride = blockDim().x * gridDim().x
 
-    for i = 1:N
+    @inbounds for i = index:stride:N
         # Reset variables
         total_energy = 0.0f0
         virial = 0.0f0
 
-        for j = index:stride:N
+        for j = 1:N
             if i == j
                 continue
             end
@@ -35,47 +35,52 @@ function energy!(
             zij = pos[3, i] - pos[3, j]
 
             # Periodic boundaries
-            xij -= L * CUDA.round(xij / L)
-            yij -= L * CUDA.round(yij / L)
-            zij -= L * CUDA.round(zij / L)
+            xij -= L * round(xij / L)
+            yij -= L * round(yij / L)
+            zij -= L * round(zij / L)
 
             # Compute distance
             Δpos = xij * xij + yij * yij + zij * zij
             Δpos = CUDA.sqrt(Δpos)
 
+            if i == 1727 && j ==785
+                @cuprintln(Δpos)
+            end
+
             if Δpos < rc
                 if Δpos < b
+                    @cuprintln(Δpos)
                     # * Energy computation
-                    ener = (a / temp) *
-                        (CUDA.pow(Δpos,-λ) - CUDA.pow(Δpos, -(λ - 1.0f0)))
+                    ener = CUDA.pow(Δpos, -λ) - CUDA.pow(Δpos, -(λ - 1.0f0))
+                    ener *= a / temp
                     ener += 1.0f0 / temp
-
 
                     # * Force computation
                     force = λ * CUDA.pow(Δpos, -(λ + 1.0f0))
                     force -= (λ - 1.0f0) * CUDA.pow(Δpos, -λ)
-                    force *= -a / temp
+                    force *= a / temp
                 else
                     force = 0.0f0
                     ener = 0.0f0
                 end
+                # * Update the energy
+                total_energy += ener
+
+                # * Update the forces
+                forces[1, i] += (force * xij) / Δpos
+                forces[2, i] += (force * yij) / Δpos
+                forces[3, i] += (force * zij) / Δpos
+
+                forces[1, j] -= (force * xij) / Δpos
+                forces[2, j] -= (force * yij) / Δpos
+                forces[3, j] -= (force * zij) / Δpos
+
+                # * Compute the virial
+                virial += (-force * xij * xij / Δpos) + (-force * yij * yij / Δpos)
+                virial += (-force * zij * zij / Δpos)
             end
-            # * Update the energy
-            total_energy += ener
-
-            # * Update the forces
-            forces[1, i] += (force * xij) / Δpos
-            forces[2, i] += (force * yij) / Δpos
-            forces[3, i] += (force * zij) / Δpos
-
-            forces[1, j] -= (force * xij) / Δpos
-            forces[2, j] -= (force * yij) / Δpos
-            forces[3, j] -= (force * zij) / Δpos
-
-            # * Compute the virial
-            virial += (force * xij * xij / Δpos) + (force * yij * yij / Δpos)
-            virial += (force * zij * zij) / Δpos
         end
+        # @cuprintln(total_energy)
 
         # * Save the values in their respective arrays
         full_ener[i] = total_energy
@@ -85,7 +90,7 @@ function energy!(
     return nothing
 end
 
-function ermak!(
+function gpu_ermak!(
     positions::AbstractArray,
     forces::AbstractArray,
     N::Integer,
