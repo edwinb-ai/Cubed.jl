@@ -79,9 +79,9 @@ function run()
         syst,
         dynamic, 
         potential, 
-        600000;
+        200000;
         filename = "$(ρ)_$(N).csv",
-        thermal = 200000,
+        thermal = 100000,
     )
 end
 
