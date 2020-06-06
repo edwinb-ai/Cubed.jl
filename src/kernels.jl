@@ -74,6 +74,7 @@ function gpu_energy!(
                 # * Compute the virial
                 virial += (force * xij * xij / Δpos) + (force * yij * yij / Δpos)
                 virial += (force * zij * zij / Δpos)
+                virial /= 2.0f0
             end
         end
 

@@ -101,7 +101,6 @@ function move(
             total_virial = sum(syst.press)
             total_virial /= (3.0f0 * syst.N)
             big_z = 1.0f0 + total_virial
-            big_z /= 2.0f0
             total_z += big_z
             # * Update the total pressure of the system
             total_pressure = big_z / syst.ρ
