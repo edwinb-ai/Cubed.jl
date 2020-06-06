@@ -6,3 +6,8 @@ It is suited for hard-sphere simulations by employing a [continuous potential](h
 As of right now it only computes the energy per particle (which should always be close to zero), as well as
 the compressibility factor `Z`.
 
+## Physical correctness
+
+Although the code is now stable enough to perform extensive computations, it may not be stable enough in terms of
+correctness, so some tweaking of the principal parameters like the time step should be modified at will until
+it is stable enough and suited to one's own needs.
