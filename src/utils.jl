@@ -1,34 +1,32 @@
 function init!(positions::AbstractArray, syst::System)
-    n3 = 2
-    ix = 0
-    iy = 0
-    iz = 0
+    dist = cbrt(1.0f0 / syst.ρ)
+    dist_half = dist / 2.0f0
 
-    # Find the lowest perfect cube, n3, greater than or equal to the
-    # number of particles
-    while n3^3 < syst.N
-        n3 += 1
-    end
+    # Define the first positions
+    positions[1, 1] = -syst.rc + dist_half
+    positions[2, 1] = -syst.rc + dist_half
+    positions[3, 1] = -syst.rc + dist_half
 
-    for i in axes(positions, 2)
-        positions[1, i] = (ix + 0.5f0) * syst.L / n3
-        positions[2, i] = (iy + 0.5f0) * syst.L / n3
-        positions[3, i] = (iz + 0.5f0) * syst.L / n3
-        ix += 1
+    # Create a complete lattice
+    @inbounds for i = 2:(syst.N-1)
+        positions[1, i] = positions[1, i - 1] + dist
+        positions[2, i] = positions[2, i - 1]
+        positions[3, i] = positions[3, i - 1]
 
-        if ix == n3
-            ix = 0
-            iy += 1
-            if iy == n3
-                iy = 0
-                iz += 1
+        if positions[1, i] > syst.rc
+            positions[1, i] = positions[1, 1]
+            positions[2, i] = positions[2, i - 1] + dist
+
+            if positions[2, i] > syst.rc
+                positions[1, i] = positions[1, 1]
+                positions[2, i] = positions[2, 1]
+                positions[3, i] = positions[3, i - 1] + dist
             end
         end
     end
 
     return nothing
 end
-
 
 function move(
     positions::AbstractArray,
@@ -49,8 +47,8 @@ function move(
     samples = 0
 
     # GPU variables for the kernels
-    nthreads = 256
-    gpu_blocks = ceil(Int,syst.N / nthreads)
+    nthreads = 512
+    gpu_blocks = ceil(Int, syst.N / nthreads)
 
     # Allocate memory for random numbers
     rnd_matrix = Matrix{Float32}(undef, 3, syst.N)
@@ -60,11 +58,12 @@ function move(
         # * Create array of random numbers
         Random.randn!(syst.rng, rnd_matrix)
         rnd_matrix .*= sqrt(2.0f0 * dynamics.τ)
-        cu_rand_matrix = CuArray(rnd_matrix)
+        cu_rand_matrix = cu(rnd_matrix)
 
         # * Move the particles following the Ermak-McCammon algorithm
         CUDA.@sync begin
-            @cuda threads=nthreads blocks=gpu_blocks gpu_ermak!(positions,
+            @cuda threads=nthreads blocks=gpu_blocks gpu_ermak!(
+                positions,
                 forces,
                 syst.N,
                 syst.L,
@@ -73,11 +72,12 @@ function move(
             )
         end
         # ! Always set forces to zero
-        CUDA.fill!(forces, 0.0f0)
+        fill!(forces, 0.0f0)
         
         # ! Compute the energy and forces, O(N^2) complexity
         CUDA.@sync begin
-            @cuda threads=nthreads blocks=gpu_blocks gpu_energy!(positions,
+            @cuda threads=nthreads blocks=gpu_blocks gpu_energy!(
+                positions,
                 forces,
                 syst.N,
                 syst.L,
@@ -95,14 +95,13 @@ function move(
             samples += 1
 
             # * Update the total energy of the system
-            display(syst.ener)
-            total_energy = sum(syst.ener)
+            total_energy = sum(syst.ener) / 2.0f0
 
             # * Extract the virial from the kernel
-            display(syst.press)
             total_virial = sum(syst.press)
             total_virial /= (3.0f0 * syst.N)
             big_z = 1.0f0 + total_virial
+            big_z /= 2.0f0
             total_z += big_z
             # * Update the total pressure of the system
             total_pressure = big_z / syst.ρ
@@ -113,18 +112,16 @@ function move(
                     println(io, "$(filener),$(total_pressure),$(big_z)")
                 end
             end
-            break
         end
     end
 
     # ! Adjust results as averages
-    total_energy /= (syst.N * samples)
-    pressure = total_pressure / samples
+    total_energy /= syst.N
     total_z /= samples
 
     # * Show results
     println("Energy: $(total_energy)")
-    println("Pressure: $(pressure)")
+    println("Pressure: $(total_pressure)")
     println("Compressibility: $(big_z)")
     println("Compressibility (average): $(total_z)")
 end

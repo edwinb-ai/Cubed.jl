@@ -11,7 +11,6 @@ function gpu_energy!(
     full_ener::AbstractArray,
     vir::AbstractArray
 )
-
     total_energy = 0.0f0
     virial = 0.0f0
     force = 0.0f0
@@ -26,6 +25,7 @@ function gpu_energy!(
         virial = 0.0f0
 
         for j = 1:N
+
             if i == j
                 continue
             end
@@ -43,26 +43,22 @@ function gpu_energy!(
             Δpos = xij * xij + yij * yij + zij * zij
             Δpos = CUDA.sqrt(Δpos)
 
-            if i == 1727 && j ==785
-                @cuprintln(Δpos)
-            end
-
             if Δpos < rc
                 if Δpos < b
-                    @cuprintln(Δpos)
                     # * Energy computation
-                    ener = CUDA.pow(Δpos, -λ) - CUDA.pow(Δpos, -(λ - 1.0f0))
+                    ener = CUDA.pow(1.0f0 / Δpos, λ) - CUDA.pow(1.0f0 / Δpos, λ - 1.0f0)
                     ener *= a / temp
                     ener += 1.0f0 / temp
 
                     # * Force computation
-                    force = λ * CUDA.pow(Δpos, -(λ + 1.0f0))
-                    force -= (λ - 1.0f0) * CUDA.pow(Δpos, -λ)
+                    force = λ * CUDA.pow(1.0f0 / Δpos, λ + 1.0f0)
+                    force -= (λ - 1.0f0) * CUDA.pow(1.0f0 / Δpos, λ)
                     force *= a / temp
                 else
                     force = 0.0f0
                     ener = 0.0f0
                 end
+                
                 # * Update the energy
                 total_energy += ener
 
@@ -76,11 +72,10 @@ function gpu_energy!(
                 forces[3, j] -= (force * zij) / Δpos
 
                 # * Compute the virial
-                virial += (-force * xij * xij / Δpos) + (-force * yij * yij / Δpos)
-                virial += (-force * zij * zij / Δpos)
+                virial += (force * xij * xij / Δpos) + (force * yij * yij / Δpos)
+                virial += (force * zij * zij / Δpos)
             end
         end
-        # @cuprintln(total_energy)
 
         # * Save the values in their respective arrays
         full_ener[i] = total_energy
