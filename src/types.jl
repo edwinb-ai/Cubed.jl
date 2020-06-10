@@ -19,3 +19,10 @@ mutable struct System{V<:Real}
     rng::Random.AbstractRNG
     ener::AbstractArray
 end
+
+function System(N, Lbox, ρ, volumen, rc, rng)
+    P = Vector{Float32}(undef, N)
+    E = Vector{Float32}(undef, N)
+    
+    return System{Float32}(N, Lbox, ρ, volumen, P, rc, rng, E)
+end
