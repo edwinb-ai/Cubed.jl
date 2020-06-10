@@ -62,18 +62,22 @@ function gpu_energy!(
                 # * Update the energy
                 total_energy += ener
 
+                # * Compute forces
+                fx = force * xij / Δpos
+                fy = force * yij / Δpos
+                fz = force * zij / Δpos
+
                 # * Update the forces
-                forces[1, i] += (force * xij) / Δpos
-                forces[2, i] += (force * yij) / Δpos
-                forces[3, i] += (force * zij) / Δpos
+                forces[1, i] += fx
+                forces[2, i] += fy
+                forces[3, i] += fz
 
-                forces[1, j] -= (force * xij) / Δpos
-                forces[2, j] -= (force * yij) / Δpos
-                forces[3, j] -= (force * zij) / Δpos
+                forces[1, j] -= fx
+                forces[2, j] -= fy
+                forces[3, j] -= fz
 
-                # * Compute the virial
-                virial += (force * xij * xij / Δpos) + (force * yij * yij / Δpos)
-                virial += (force * zij * zij / Δpos)
+                # * Compute the virial, avoid double counting
+                virial += 0.5f0 * (fx * xij + fy * yij + fz * zij)
             end
         end
 

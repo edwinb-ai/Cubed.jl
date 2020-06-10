@@ -8,7 +8,7 @@ function init!(positions::AbstractArray, syst::System)
     positions[3, 1] = -syst.rc + dist_half
 
     # Create a complete lattice
-    @inbounds for i = 2:(syst.N-1)
+    @inbounds for i = 2:(syst.N - 1)
         positions[1, i] = positions[1, i - 1] + dist
         positions[2, i] = positions[2, i - 1]
         positions[3, i] = positions[3, i - 1]
@@ -62,7 +62,7 @@ function move(
 
         # * Move the particles following the Ermak-McCammon algorithm
         CUDA.@sync begin
-            @cuda threads=nthreads blocks=gpu_blocks gpu_ermak!(
+            @cuda threads = nthreads blocks = gpu_blocks gpu_ermak!(
                 positions,
                 forces,
                 syst.N,
@@ -76,7 +76,7 @@ function move(
         
         # ! Compute the energy and forces, O(N^2) complexity
         CUDA.@sync begin
-            @cuda threads=nthreads blocks=gpu_blocks gpu_energy!(
+            @cuda threads = nthreads blocks = gpu_blocks gpu_energy!(
                 positions,
                 forces,
                 syst.N,
@@ -101,9 +101,9 @@ function move(
             total_virial = sum(syst.press)
             total_virial /= (3.0f0 * syst.N)
             big_z = 1.0f0 + total_virial
-            total_z += big_z
+            total_z += big_z # This is just an accumulator
             # * Update the total pressure of the system
-            total_pressure = big_z / syst.ρ
+            total_pressure = big_z * syst.ρ
 
             if !isnothing(filename)
                 open(filename, "a") do io

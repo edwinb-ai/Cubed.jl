@@ -1,3 +1,6 @@
+using Pkg
+Pkg.activate("./")
+
 module Cubed
 
 using Random
@@ -36,7 +39,7 @@ function run()
 
     # Initialize the system object
     syst = System(N, Lbox, ρ, volumen, P, rc, rng, E)
-    dynamic = Dynamic(0.000005f0)
+    dynamic = Dynamic(0.00001f0)
     # Create the Potential object
     λ = 50
     b = convert(Float32, λ / (λ - 1.0f0))
@@ -56,7 +59,8 @@ function run()
 
     # ! Compute the initial energy of the system
     CUDA.@sync begin
-        @cuda threads=nthreads blocks=gpu_blocks gpu_energy!(cu_positions,
+        @cuda threads = nthreads blocks = gpu_blocks gpu_energy!(
+            cu_positions,
             forces,
             syst.N,
             syst.L,
