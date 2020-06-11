@@ -20,6 +20,10 @@ mutable struct System{V<:Real}
     ener::AbstractArray
 end
 
+"""
+    The system created should always allocate the pressure
+and energy arrays for the user.
+"""
 function System(N, Lbox, ρ, volumen, rc, rng)
     P = Vector{Float32}(undef, N)
     E = Vector{Float32}(undef, N)

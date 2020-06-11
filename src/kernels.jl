@@ -95,8 +95,8 @@ function gpu_ermak!(
     N::Integer,
     L::Real,
     τ::Real,
-    rnd_matrix::AbstractArray;
-    pbc::Bool = true
+    rnd_matrix::AbstractArray,
+    pbc::Bool
 )
 
     index = (blockIdx().x - 1) * blockDim().x + threadIdx().x

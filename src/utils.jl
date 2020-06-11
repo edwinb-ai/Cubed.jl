@@ -1,3 +1,10 @@
+"""
+    Create a mesh-like initial configuration for the simulation system.
+It uses the information from the system such as the cut-off radius and the
+density of the system to allocate the particles.
+
+It modifies the original `positions` array, so it is an in-place operation.
+"""
 function init!(positions::AbstractArray, syst::System)
     dist = cbrt(1.0f0 / syst.ρ)
     dist_half = dist / 2.0f0
@@ -28,6 +35,12 @@ function init!(positions::AbstractArray, syst::System)
     return nothing
 end
 
+"""
+    This constitutes the MAIN LOOP for all the simulation, it creates storage variables
+as well as some arrays to compute the full evolution of the system. Most of the operations here
+are carried out on the GPU device, except for the accumulation operations for the compressibility
+factor and other things.
+"""
 function move(
     positions::AbstractArray,
     forces::AbstractArray,
@@ -45,6 +58,11 @@ function move(
     total_z = 0.0f0
     total_virial = 0.0f0
     samples = 0
+    # MSD
+    msdval = 0.0f0
+    ref_pos = Matrix{Float32}(undef, 3, syst.N)
+    time_acc = 0.0f0
+    hst_positions = Matrix{Float32}(undef, 3, syst.N)
 
     # GPU variables for the kernels
     nthreads = 512
@@ -52,6 +70,9 @@ function move(
 
     # Allocate memory for random numbers
     rnd_matrix = Matrix{Float32}(undef, 3, syst.N)
+
+    # When equilibrating, always use periodic boundary conditions
+    pbc = true
 
     # ! Main loop
     @showprogress for i = 1:cycles
@@ -69,10 +90,11 @@ function move(
                 syst.L,
                 dynamics.τ,
                 cu_rand_matrix,
+                pbc
             )
         end
         # ! Always set forces to zero
-        fill!(forces, 0.0f0)
+        CUDA.fill!(forces, 0.0f0)
         
         # ! Compute the energy and forces, O(N^2) complexity
         CUDA.@sync begin
@@ -90,12 +112,17 @@ function move(
                 syst.press,
             )
         end
-        # * Save to file
+
+        # * Start accumulating averages
         if i >= thermal
+            # ! Turn off periodic boundary conditions
+            pbc = false
+            
+            # ! Update the samples counter
             samples += 1
 
             # * Update the total energy of the system
-            total_energy = sum(syst.ener) / 2.0f0
+            total_energy = sum(syst.ener)
 
             # * Extract the virial from the kernel
             total_virial = sum(syst.press)
@@ -109,6 +136,23 @@ function move(
                 open(filename, "a") do io
                     filener = total_energy / (syst.N * samples)
                     println(io, "$(filener),$(total_pressure),$(big_z)")
+                end
+            end
+
+            # * Reference positions for the MSD, at first time step
+            if samples == 1
+                ref_pos = Array(positions)
+            end
+
+            # * Accumulate MSD
+            if samples > 1
+                time_acc += dynamics.τ
+                hst_positions = Array(positions)
+                msdval = msd!(hst_positions, ref_pos)
+                msdval /= syst.N
+
+                open("msd.csv", "a") do io
+                    println(io, "$(time_acc),$(msdval)")
                 end
             end
         end

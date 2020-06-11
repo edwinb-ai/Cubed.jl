@@ -1,3 +1,10 @@
+"""
+    This is the main API that should be available to the end user.
+It just receives the main information for the system to simulate, and the rest
+is done internally.
+
+It always computes and prints out the initial energy of the system.
+"""
 function simulate(
     syst::System,
     dynamic::Dynamic,
@@ -55,5 +62,6 @@ function simulate(
         potential, 
         cycles;
         filename = "$(syst.ρ)_$(syst.N).csv",
+        thermal = 150000
     )
 end
