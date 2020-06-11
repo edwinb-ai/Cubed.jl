@@ -9,6 +9,7 @@ function simulate(
     syst::System,
     dynamic::Dynamic,
     potential::Potential;
+    thermal::Integer = 150000,
     cycles::Integer = 200000,
     filenames = nothing
 )
@@ -63,6 +64,6 @@ function simulate(
         potential, 
         cycles;
         filenames = filenames,
-        thermal = 150000
+        thermal = thermal
     )
 end
