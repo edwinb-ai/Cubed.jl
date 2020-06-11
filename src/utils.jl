@@ -48,7 +48,7 @@ function move(
     dynamics::Dynamic,
     potential::Potential,
     cycles::Integer;
-    filename::String = nothing,
+    filenames::AbstractArray = nothing,
     thermal::Integer = Int(cycles / 2)
 )
     # * Accumulation variables
@@ -132,11 +132,10 @@ function move(
             # * Update the total pressure of the system
             total_pressure = big_z * syst.ρ
 
-            if !isnothing(filename)
-                open(filename, "a") do io
-                    filener = total_energy / (syst.N * samples)
-                    println(io, "$(filener),$(total_pressure),$(big_z)")
-                end
+            # ! Save energy, pressure and compressibility to file
+            open(filenames[1], "a") do io
+                filener = total_energy / (syst.N * samples)
+                println(io, "$(filener),$(total_pressure),$(big_z)")
             end
 
             # * Reference positions for the MSD, at first time step
@@ -151,7 +150,7 @@ function move(
                 msdval = msd!(hst_positions, ref_pos)
                 msdval /= syst.N
 
-                open("msd.csv", "a") do io
+                open(filenames[2], "a") do io
                     println(io, "$(time_acc),$(msdval)")
                 end
             end

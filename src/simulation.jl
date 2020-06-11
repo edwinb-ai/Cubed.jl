@@ -9,7 +9,8 @@ function simulate(
     syst::System,
     dynamic::Dynamic,
     potential::Potential;
-    cycles::Integer = 200000
+    cycles::Integer = 200000,
+    filenames = nothing
 )
     # Assign device memory for virial and energy
     P = CuVector{Float32}(undef, syst.N)
@@ -61,7 +62,7 @@ function simulate(
         dynamic, 
         potential, 
         cycles;
-        filename = "$(syst.ρ)_$(syst.N).csv",
+        filenames = filenames,
         thermal = 150000
     )
 end
