@@ -11,3 +11,16 @@ function msd!(positions::AbstractArray, ref_pos::AbstractArray)
 
     return result
 end
+
+function savemsd(positions::AbstractArray, path::String)
+
+    @inbounds for i ∈ axes(positions, 2)
+        filename = joinpath(path, "msd_$(i).csv")
+
+        open(filename, "a") do io
+            println(io, "$(positions[1, i]),$(positions[2, i]),$(positions[3, i])")
+        end
+    end
+
+    return nothing
+end

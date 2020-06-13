@@ -7,7 +7,7 @@ using CUDA
 include("types.jl")
 export System, Dynamic, Potential
 include("msd.jl")
-export msd!
+export msd!, savemsd
 include("kernels.jl")
 export gpu_energy!, gpu_ermak!
 include("utils.jl")

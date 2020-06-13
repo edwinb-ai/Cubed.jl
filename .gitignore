@@ -1,2 +1,7 @@
 *.csv
 throwaway.jl
+msd_files/
+.vscode/
+fullmsd.txt
+msd_analyse.jl
+pymsd.py

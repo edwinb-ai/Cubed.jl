@@ -153,6 +153,8 @@ function move(
                 open(filenames[2], "a") do io
                     println(io, "$(time_acc),$(msdval)")
                 end
+
+                savemsd(hst_positions, filenames[3])
             end
         end
     end
