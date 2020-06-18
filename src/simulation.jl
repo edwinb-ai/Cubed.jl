@@ -11,7 +11,9 @@ function simulate(
     potential::Potential;
     thermal::Integer = 150000,
     cycles::Integer = 200000,
-    filenames = nothing
+    filenames = nothing,
+    logging = nothing,
+    msd = nothing,
 )
     # Assign device memory for virial and energy
     P = CuVector{Float32}(undef, syst.N)
@@ -56,7 +58,7 @@ function simulate(
     println("Initial energy: $(totale)")
 
     # * Main loop
-    move(
+    move!(
         cu_positions,
         forces,
         syst,
@@ -64,6 +66,8 @@ function simulate(
         potential, 
         cycles;
         filenames = filenames,
-        thermal = thermal
+        thermal = thermal,
+        msd = msd,
+        logging = logging,
     )
 end
