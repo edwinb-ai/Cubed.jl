@@ -37,7 +37,7 @@ end
 
 function snapshot(positions, filename, i)
     snapshot_file = joinpath(filename, "system_$(i).csv")
-    CSV.write(snapshot_file, DataFrame(positions))
+    CSV.write(snapshot_file, DataFrame(transpose(positions)))
     
     return nothing    
 end
