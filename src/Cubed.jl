@@ -3,7 +3,7 @@ module Cubed
 using Random
 using ProgressMeter
 using CUDA
-using Serialization
+using CSV, DataFrames
 
 include("types.jl")
 export System, Dynamic, Potential

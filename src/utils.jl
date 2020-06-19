@@ -36,10 +36,8 @@ function init!(positions::AbstractArray, syst::System)
 end
 
 function snapshot(positions, filename, i)
-    snapshot_file = joinpath(filename, "system_$(i).jls")
-    open(snapshot_file, "w") do io
-        serialize(io, positions)
-    end
+    snapshot_file = joinpath(filename, "system_$(i).csv")
+    CSV.write(snapshot_file, DataFrame(positions))
     
     return nothing    
 end
