@@ -36,8 +36,9 @@ function init!(positions::AbstractArray, syst::System)
 end
 
 function snapshot(positions, filename, i)
+    (N, M) = size(positions)
     snapshot_file = joinpath(filename, "system_$(i).csv")
-    CSV.write(snapshot_file, DataFrame(transpose(positions)))
+    CSV.write(snapshot_file, DataFrame(reshape(positions, (M, N))))
     
     return nothing    
 end
